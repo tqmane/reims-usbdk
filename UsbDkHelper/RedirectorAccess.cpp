@@ -75,6 +75,39 @@ void UsbDkRedirectorAccess::ResetDevice()
     IoctlSync(IOCTL_USBDK_DEVICE_RESET_DEVICE);
 }
 
+void UsbDkRedirectorAccess::GetCapabilities(USB_DK_REDIRECTOR_CAPABILITIES &Capabilities)
+{
+    Capabilities = {};
+    DWORD bytes = 0;
+    if (!IoctlSync(IOCTL_USBDK_DEVICE_GET_CAPABILITIES, false, nullptr, 0,
+                   &Capabilities, sizeof(Capabilities), &bytes) ||
+        bytes != sizeof(Capabilities) || Capabilities.Size != sizeof(Capabilities) ||
+        Capabilities.ProtocolVersion != USB_DK_REDIRECTOR_PROTOCOL_VERSION ||
+        Capabilities.Reserved != 0)
+    {
+        throw UsbDkRedirectorAccessException(TEXT("Unsupported redirector protocol"), ERROR_NOT_SUPPORTED);
+    }
+}
+
+void UsbDkRedirectorAccess::SetConfiguration(ULONG64 ConfigurationValue)
+{
+    if (ConfigurationValue > 255)
+    {
+        throw UsbDkRedirectorAccessException(TEXT("Invalid configuration value"), ERROR_INVALID_PARAMETER);
+    }
+    USB_DK_REDIRECTOR_CAPABILITIES capabilities;
+    GetCapabilities(capabilities);
+    if (!(capabilities.Capabilities & USB_DK_CAP_SET_CONFIGURATION))
+    {
+        throw UsbDkRedirectorAccessException(TEXT("SET_CONFIGURATION requires an updated driver"), ERROR_NOT_SUPPORTED);
+    }
+    USB_DK_SET_CONFIGURATION request = {sizeof(request), USB_DK_REDIRECTOR_PROTOCOL_VERSION, ConfigurationValue};
+    if (!IoctlSync(IOCTL_USBDK_DEVICE_SET_CONFIGURATION, false, &request, sizeof(request)))
+    {
+        throw UsbDkRedirectorAccessException(TEXT("SET_CONFIGURATION failed"));
+    }
+}
+
 bool UsbDkRedirectorAccess::IoctlSync(DWORD Code,
                                       bool ShortBufferOk,
                                       LPVOID InBuffer,
@@ -89,7 +122,7 @@ bool UsbDkRedirectorAccess::IoctlSync(DWORD Code,
         throw UsbDkDriverFileException(TEXT("CreateEvent failed"));
     }
 
-    OVERLAPPED Overlapped;
+    OVERLAPPED Overlapped = {};
     Overlapped.hEvent = Event;
     auto res = Ioctl(Code, ShortBufferOk, InBuffer, InBufferSize, OutBuffer, OutBufferSize, BytesReturned, &Overlapped);
 
@@ -100,6 +133,10 @@ bool UsbDkRedirectorAccess::IoctlSync(DWORD Code,
         if (!GetOverlappedResult(m_hDriver, &Overlapped, &NumberOfBytesTransferred, TRUE))
         {
             throw UsbDkDriverFileException(TEXT("GetOverlappedResult failed"));
+        }
+        if (BytesReturned != nullptr)
+        {
+            *BytesReturned = NumberOfBytesTransferred;
         }
         return true;
     case TransferSuccess:

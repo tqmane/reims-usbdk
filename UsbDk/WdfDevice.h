@@ -179,6 +179,10 @@ public:
     virtual NTSTATUS Create(CWdfDevice &Device);
     void StopSync()
     {WdfIoQueueDrain(m_Queue, nullptr, nullptr); }
+    void Purge()
+    { WdfIoQueuePurge(m_Queue, nullptr, nullptr); }
+    void PurgeSynchronously()
+    { WdfIoQueuePurgeSynchronously(m_Queue); }
     void Start()
     {WdfIoQueueStart(m_Queue);}
 

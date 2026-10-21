@@ -23,6 +23,25 @@
 
 #pragma once
 
+// Additive redirector protocol. The original 1.0.22 driver has no such IOCTL.
+#define USB_DK_REDIRECTOR_PROTOCOL_VERSION 1
+#define USB_DK_CAP_SET_CONFIGURATION 1
+
+typedef struct tag_USB_DK_REDIRECTOR_CAPABILITIES
+{
+    ULONG Size;
+    ULONG ProtocolVersion;
+    ULONG Capabilities;
+    ULONG Reserved;
+} USB_DK_REDIRECTOR_CAPABILITIES, *PUSB_DK_REDIRECTOR_CAPABILITIES;
+
+typedef struct tag_USB_DK_SET_CONFIGURATION
+{
+    ULONG Size;
+    ULONG ProtocolVersion;
+    ULONG64 ConfigurationValue;
+} USB_DK_SET_CONFIGURATION, *PUSB_DK_SET_CONFIGURATION;
+
 typedef struct tag_USB_DK_DEVICE_ID
 {
     WCHAR DeviceID[MAX_DEVICE_ID_LEN];

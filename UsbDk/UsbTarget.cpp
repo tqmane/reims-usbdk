@@ -310,6 +310,10 @@ void CWdfUsbTarget::DeviceDescriptor(USB_DEVICE_DESCRIPTOR &Descriptor)
 
 NTSTATUS CWdfUsbTarget::SetInterfaceAltSetting(ULONG64 InterfaceIdx, ULONG64 AltSettingIdx)
 {
+    if (m_UseRawConfiguration)
+    {
+        return m_RawConfiguration ? m_RawConfiguration->SetAltSetting(InterfaceIdx, AltSettingIdx) : STATUS_INVALID_DEVICE_STATE;
+    }
     if (InterfaceIdx >= m_NumInterfaces)
     {
         return STATUS_INVALID_PARAMETER_1;
@@ -387,6 +391,10 @@ void CWdfUsbTarget::WriteIsochronousPipeAsync(WDFREQUEST Request, ULONG64 Endpoi
 
 NTSTATUS CWdfUsbTarget::AbortPipe(WDFREQUEST Request, ULONG64 EndpointAddress)
 {
+    if (m_UseRawConfiguration)
+    {
+        return m_RawConfiguration ? m_RawConfiguration->ClearPipe(EndpointAddress, false) : STATUS_INVALID_DEVICE_STATE;
+    }
     NTSTATUS status;
 
     //AbortPipe does not require locking because is scheduled sequentially
@@ -411,6 +419,10 @@ NTSTATUS CWdfUsbTarget::AbortPipe(WDFREQUEST Request, ULONG64 EndpointAddress)
 
 NTSTATUS CWdfUsbTarget::ResetPipe(WDFREQUEST Request, ULONG64 EndpointAddress)
 {
+    if (m_UseRawConfiguration)
+    {
+        return m_RawConfiguration ? m_RawConfiguration->ClearPipe(EndpointAddress, true) : STATUS_INVALID_DEVICE_STATE;
+    }
     NTSTATUS status;
 
     //ResetPipe does not require locking because is scheduled sequentially
@@ -435,6 +447,10 @@ NTSTATUS CWdfUsbTarget::ResetPipe(WDFREQUEST Request, ULONG64 EndpointAddress)
 
 NTSTATUS CWdfUsbTarget::ResetDevice(WDFREQUEST Request)
 {
+    if (m_UseRawConfiguration)
+    {
+        return m_RawConfiguration ? m_RawConfiguration->Reset() : STATUS_INVALID_DEVICE_STATE;
+    }
     NTSTATUS status = STATUS_SUCCESS;
 
     //ResetDevice does not require locking because is scheduled sequentially
@@ -487,4 +503,98 @@ NTSTATUS CWdfUsbTarget::ControlTransferAsync(CTargetRequest &WdfRequest, PWDF_US
 void CWdfUsbTarget::TracePipeNotFoundError(ULONG64 EndpointAddress)
 {
     TraceEvents(TRACE_LEVEL_ERROR, TRACE_USBTARGET, "Pipe %llu not found", EndpointAddress);
+}
+
+NTSTATUS CWdfUsbTarget::SetConfiguration(ULONG64 Value)
+{
+    if (Value > 255)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    CObjHolder<CUsbDkRawConfiguration> candidate(new CUsbDkRawConfiguration(m_UsbDevice));
+    if (!candidate)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    auto status = candidate->Prepare(static_cast<UCHAR>(Value));
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+    // All I/O is drained by the redirector before replacing stack pipe handles.
+    // Once selection is attempted, failures must not revive stale WDF handles.
+    m_UseRawConfiguration = true;
+    m_RawConfiguration.reset();
+    status = candidate->Select();
+    if (NT_SUCCESS(status))
+    {
+        m_RawConfiguration.reset(candidate.detach());
+    }
+    return status;
+}
+
+NTSTATUS CWdfUsbTarget::FormatRawTransfer(WDFREQUEST Request, ULONG64 Address, USB_DK_TRANSFER_TYPE Type,
+                                         bool Read, WDFMEMORY Buffer, PULONG64 PacketSizes,
+                                         size_t PacketCount, WDFMEMORY &UrbMemory)
+{
+    return m_RawConfiguration ? m_RawConfiguration->FormatTransfer(Request, Address, Type, Read, Buffer,
+                                                                  PacketSizes, PacketCount, UrbMemory) : STATUS_INVALID_DEVICE_STATE;
+}
+
+void CWdfUsbPipe::Purge()
+{
+    if (m_Pipe != WDF_NO_HANDLE)
+    {
+        WdfIoTargetPurge(WdfUsbTargetPipeGetIoTarget(m_Pipe), WdfIoTargetPurgeIoAndWait);
+    }
+}
+
+void CWdfUsbPipe::Start()
+{
+    if (m_Pipe != WDF_NO_HANDLE)
+    {
+        WdfIoTargetStart(WdfUsbTargetPipeGetIoTarget(m_Pipe));
+    }
+}
+
+void CWdfUsbInterface::Purge()
+{
+    for (UCHAR i = 0; m_Pipes && i < m_NumPipes; ++i)
+    {
+        m_Pipes[i].Purge();
+    }
+}
+
+void CWdfUsbInterface::Start()
+{
+    for (UCHAR i = 0; m_Pipes && i < m_NumPipes; ++i)
+    {
+        m_Pipes[i].Start();
+    }
+}
+
+void CWdfUsbTarget::Purge()
+{
+    if (m_UsbDevice == WDF_NO_HANDLE)
+    {
+        return;
+    }
+    for (UCHAR i = 0; !m_UseRawConfiguration && m_Interfaces && i < m_NumInterfaces; ++i)
+    {
+        m_Interfaces[i].Purge();
+    }
+    WdfIoTargetPurge(WdfUsbTargetDeviceGetIoTarget(m_UsbDevice), WdfIoTargetPurgeIoAndWait);
+}
+
+void CWdfUsbTarget::Start()
+{
+    if (m_UsbDevice == WDF_NO_HANDLE)
+    {
+        return;
+    }
+    WdfIoTargetStart(WdfUsbTargetDeviceGetIoTarget(m_UsbDevice));
+    for (UCHAR i = 0; !m_UseRawConfiguration && m_Interfaces && i < m_NumInterfaces; ++i)
+    {
+        m_Interfaces[i].Start();
+    }
 }

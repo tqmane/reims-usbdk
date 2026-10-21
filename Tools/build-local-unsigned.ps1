@@ -6,7 +6,8 @@ param(
 $ErrorActionPreference='Stop'
 $source=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot=[IO.Path]::GetFullPath($Output)
-if ($outputRoot.StartsWith($source+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Keep build output outside the source checkout.' }
+if ($outputRoot.Equals($source,[StringComparison]::OrdinalIgnoreCase) -or
+    $outputRoot.StartsWith($source+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Keep build output outside the source checkout.' }
 [void][IO.Directory]::CreateDirectory($outputRoot)
 $env:TEMP=$outputRoot;$env:TMP=$outputRoot
 $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -45,7 +46,7 @@ try {
     $arguments=@('/nologo','/DRIVER','/SUBSYSTEM:NATIVE,10.00','/ENTRY:FxDriverEntry','/NODEFAULTLIB',
         '/MACHINE:X64',('/OUT:'+(Join-Path $outputRoot 'UsbDk.sys')))
     $arguments+=@($libraries | ForEach-Object { '/LIBPATH:'+$_ })
-    & $linker @arguments @objects ntoskrnl.lib hal.lib wmilib.lib WdfLdr.lib WdfDriverEntry.lib usbdex.lib ntstrsafe.lib wdmsec.lib BufferOverflowFastFailK.lib libcntpr.lib
+    & $linker @arguments @objects ntoskrnl.lib hal.lib wmilib.lib WdfLdr.lib WdfDriverEntry.lib usbdex.lib usbd.lib ntstrsafe.lib wdmsec.lib BufferOverflowFastFailK.lib libcntpr.lib
     if ($LASTEXITCODE) { throw 'Unsigned driver link failed.' }
     $helperOutput=Join-Path $outputRoot 'helper'
     [void][IO.Directory]::CreateDirectory($helperOutput)

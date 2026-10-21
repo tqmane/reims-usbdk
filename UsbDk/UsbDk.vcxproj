@@ -635,6 +635,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Win8 Debug|x64'">Use</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Win8 Debug_NoSign|x64'">Use</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="RawConfiguration.cpp" />
     <ClCompile Include="UsbTarget.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Win8 Release|Win32'">Use</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Win8.1 Release|Win32'">Use</PrecompiledHeader>
@@ -790,6 +791,8 @@
     <ClInclude Include="UsbDkUtil.h" />
     <ClInclude Include="Trace.h" />
     <ClInclude Include="UsbTarget.h" />
+    <ClInclude Include="RawConfiguration.h" />
+    <ClInclude Include="ConfigurationDescriptor.h" />
     <ClInclude Include="WdfDevice.h" />
     <ClInclude Include="WdfRequest.h" />
     <ClInclude Include="WdfWorkitem.h" />
@@ -1822,6 +1825,11 @@
   <ItemGroup>
     <ResourceCompile Include="Resource.rc" />
   </ItemGroup>
+  <ItemDefinitionGroup>
+    <Link>
+      <AdditionalDependencies>%(AdditionalDependencies);usbd.lib</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

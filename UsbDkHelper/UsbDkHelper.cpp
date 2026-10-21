@@ -277,6 +277,56 @@ DLL BOOL UsbDk_ResetDevice(HANDLE DeviceHandle)
     }
 }
 
+BOOL UsbDk_GetRedirectorCapabilities(HANDLE DeviceHandle, PUSB_DK_REDIRECTOR_CAPABILITIES Capabilities)
+{
+    if (DeviceHandle == nullptr || DeviceHandle == INVALID_HANDLE_VALUE || Capabilities == nullptr)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    try
+    {
+        auto deviceHandle = unpackHandle<REDIRECTED_DEVICE_HANDLE>(DeviceHandle);
+        deviceHandle->RedirectorAccess->GetCapabilities(*Capabilities);
+        return TRUE;
+    }
+    catch (const UsbDkW32ErrorException &e)
+    {
+        SetLastError(e.GetErrorCode());
+        return FALSE;
+    }
+    catch (const exception &)
+    {
+        SetLastError(ERROR_GEN_FAILURE);
+        return FALSE;
+    }
+}
+
+BOOL UsbDk_SetConfiguration(HANDLE DeviceHandle, ULONG64 ConfigurationValue)
+{
+    if (DeviceHandle == nullptr || DeviceHandle == INVALID_HANDLE_VALUE || ConfigurationValue > 255)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    try
+    {
+        auto deviceHandle = unpackHandle<REDIRECTED_DEVICE_HANDLE>(DeviceHandle);
+        deviceHandle->RedirectorAccess->SetConfiguration(ConfigurationValue);
+        return TRUE;
+    }
+    catch (const UsbDkW32ErrorException &e)
+    {
+        SetLastError(e.GetErrorCode());
+        return FALSE;
+    }
+    catch (const exception &)
+    {
+        SetLastError(ERROR_GEN_FAILURE);
+        return FALSE;
+    }
+}
+
 HANDLE UsbDk_GetRedirectorSystemHandle(HANDLE DeviceHandle)
 {
     try
