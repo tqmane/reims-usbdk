@@ -86,6 +86,12 @@ public:
     static size_t GetRequestContextSize();
 
 private:
+    void QuiesceData();
+    void ResumeData();
+    void RawTransfer(CRedirectorRequest &Request, bool Read);
+    static void RawCompletion(WDFREQUEST Request, WDFIOTARGET Target, PWDF_REQUEST_COMPLETION_PARAMS Params, WDFCONTEXT Context);
+    WDFFILEOBJECT m_ConfigurationOwner = WDF_NO_HANDLE;
+
     void DoControlTransfer(CRedirectorRequest &WdfRequest, WDFMEMORY DataBuffer);
     void WritePipe(WDFREQUEST Request);
     void ReadPipe(WDFREQUEST Request);

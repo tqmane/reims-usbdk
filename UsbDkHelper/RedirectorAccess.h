@@ -51,6 +51,8 @@ public:
     void ResetPipe(ULONG64 PipeAddress);
     void SetAltsetting(ULONG64 InterfaceIdx, ULONG64 AltSettingIdx);
     void ResetDevice();
+    void GetCapabilities(USB_DK_REDIRECTOR_CAPABILITIES &Capabilities);
+    void SetConfiguration(ULONG64 ConfigurationValue);
 
     HANDLE GetSystemHandle() const
     { return m_hDriver; }

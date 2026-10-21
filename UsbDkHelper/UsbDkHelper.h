@@ -238,6 +238,13 @@ extern "C" {
     */
     DLL BOOL             UsbDk_ResetDevice(HANDLE DeviceHandle);
 
+    // Capability query fails with the original 1.0.22 SYS; never assume support.
+    DLL BOOL             UsbDk_GetRedirectorCapabilities(HANDLE DeviceHandle, PUSB_DK_REDIRECTOR_CAPABILITIES Capabilities);
+
+    // USB bConfigurationValue, not its position in the descriptor list. Zero
+    // deconfigures the device. Requires the matching additive driver protocol.
+    DLL BOOL             UsbDk_SetConfiguration(HANDLE DeviceHandle, ULONG64 ConfigurationValue);
+
     /* Get system handle for asynchronous I/O cancellation requests
     *
     * @params

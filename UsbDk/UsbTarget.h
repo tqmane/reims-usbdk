@@ -27,6 +27,7 @@
 #include "UsbDkUtil.h"
 #include "Urb.h"
 #include "WdfRequest.h"
+#include "RawConfiguration.h"
 
 using USBDK_TARGET_REQUEST_CONTEXT = struct : public WDF_REQUEST_CONTEXT
 {
@@ -81,6 +82,8 @@ public:
 
     NTSTATUS Abort(WDFREQUEST Request);
     NTSTATUS Reset(WDFREQUEST Request);
+    void Purge();
+    void Start();
     UCHAR EndpointAddress() const
     {
         return m_Info.EndpointAddress;
@@ -132,6 +135,8 @@ public:
     }
 
     NTSTATUS Reset(WDFREQUEST Request);
+    void Purge();
+    void Start();
 
     class Lock : public CWdmExSpinLock
     {
@@ -183,6 +188,14 @@ public:
     NTSTATUS AbortPipe(WDFREQUEST Request, ULONG64 EndpointAddress);
     NTSTATUS ResetPipe(WDFREQUEST Request, ULONG64 EndpointAddress);
     NTSTATUS ResetDevice(WDFREQUEST Request);
+    NTSTATUS SetConfiguration(ULONG64 Value);
+    bool UsesRawConfiguration() const { return m_UseRawConfiguration; }
+    WDFIOTARGET RawIoTarget() const { return WdfUsbTargetDeviceGetIoTarget(m_UsbDevice); }
+    NTSTATUS FormatRawTransfer(WDFREQUEST Request, ULONG64 Address, USB_DK_TRANSFER_TYPE Type,
+                              bool Read, WDFMEMORY Buffer, PULONG64 PacketSizes,
+                              size_t PacketCount, WDFMEMORY &UrbMemory);
+    void Purge();
+    void Start();
 
 private:
     void TracePipeNotFoundError(ULONG64 EndpointAddress);
@@ -207,6 +220,9 @@ private:
 
     CObjHolder<CWdfUsbInterface, CVectorDeleter<CWdfUsbInterface> > m_Interfaces;
     UCHAR m_NumInterfaces = 0;
+
+    bool m_UseRawConfiguration = false;
+    CObjHolder<CUsbDkRawConfiguration> m_RawConfiguration;
 
     CAtomicCounter m_ControlTransferCouter;
 

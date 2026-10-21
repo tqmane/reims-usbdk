@@ -35,6 +35,8 @@ enum UsbDkTransferDirection
 #include "RedirectorStrategy.tmh"
 #include "ControlDevice.h"
 #include "WdfRequest.h"
+#include "TransferBounds.h"
+#include "ConfigurationTransaction.h"
 
 NTSTATUS CUsbDkRedirectorStrategy::MakeAvailable()
 {
@@ -93,6 +95,7 @@ using USBDK_REDIRECTOR_REQUEST_CONTEXT = struct : public USBDK_TARGET_REQUEST_CO
     PUSB_DK_GEN_TRANSFER_RESULT GenResult;
     WDF_USB_CONTROL_SETUP_PACKET SetupPacket;
     UsbDkTransferDirection Direction;
+    WDFMEMORY RawUrb;
 
     WDFMEMORY LockedIsochronousPacketsArray;
     WDFMEMORY LockedIsochronousResultsArray;
@@ -395,6 +398,67 @@ void CUsbDkRedirectorStrategy::IoDeviceControlConfig(WDFREQUEST Request,
 {
     switch (IoControlCode)
     {
+        case IOCTL_USBDK_DEVICE_GET_CAPABILITIES:
+        {
+            CRedirectorRequest request(Request);
+            auto file = WdfRequestGetFileObject(Request);
+            if (file == WDF_NO_HANDLE ||
+                (m_ConfigurationOwner != WDF_NO_HANDLE && m_ConfigurationOwner != file))
+            {
+                request.SetStatus(STATUS_ACCESS_DENIED);
+                return;
+            }
+            if (InputBufferLength != 0 || OutputBufferLength != sizeof(USB_DK_REDIRECTOR_CAPABILITIES))
+            {
+                request.SetStatus(STATUS_INVALID_PARAMETER);
+                return;
+            }
+            PUSB_DK_REDIRECTOR_CAPABILITIES capabilities;
+            auto status = request.FetchOutputObject(capabilities);
+            if (NT_SUCCESS(status))
+            {
+                *capabilities = {sizeof(*capabilities), USB_DK_REDIRECTOR_PROTOCOL_VERSION,
+                                 USB_DK_CAP_SET_CONFIGURATION, 0};
+                m_ConfigurationOwner = file;
+                request.SetOutputDataLen(sizeof(*capabilities));
+            }
+            request.SetStatus(status);
+            return;
+        }
+        case IOCTL_USBDK_DEVICE_SET_CONFIGURATION:
+        {
+            CRedirectorRequest request(Request);
+            if (!UsbDkConfigurationOwnerMatches(m_ConfigurationOwner, WdfRequestGetFileObject(Request)))
+            {
+                request.SetStatus(STATUS_ACCESS_DENIED);
+                return;
+            }
+            if (InputBufferLength != sizeof(USB_DK_SET_CONFIGURATION) || OutputBufferLength != 0)
+            {
+                request.SetStatus(STATUS_INVALID_PARAMETER);
+                return;
+            }
+            PUSB_DK_SET_CONFIGURATION configuration;
+            auto status = request.FetchInputObject(configuration);
+            if (!NT_SUCCESS(status))
+            {
+                request.SetStatus(status);
+                return;
+            }
+            if (configuration->Size != sizeof(*configuration) ||
+                configuration->ProtocolVersion != USB_DK_REDIRECTOR_PROTOCOL_VERSION ||
+                configuration->ConfigurationValue > 255)
+            {
+                request.SetStatus(STATUS_INVALID_PARAMETER);
+                return;
+            }
+            auto value = configuration->ConfigurationValue;
+            QuiesceData();
+            status = WdfRequestIsCanceled(Request) ? STATUS_CANCELLED : m_Target.SetConfiguration(value);
+            ResumeData();
+            request.SetStatus(status);
+            return;
+        }
         default:
         {
             CUsbDkHiderStrategy::IoDeviceControl(Request, OutputBufferLength, InputBufferLength, IoControlCode);
@@ -418,18 +482,20 @@ void CUsbDkRedirectorStrategy::IoDeviceControlConfig(WDFREQUEST Request,
         }
         case IOCTL_USBDK_DEVICE_SET_ALTSETTING:
         {
-            m_IncomingDataQueue.StopSync();
+            QuiesceData();
             CRedirectorRequest WdfRequest(Request);
             UsbDkHandleRequestWithInput<USBDK_ALTSETTINGS_IDXS>(WdfRequest,
                                                 [this, Request](USBDK_ALTSETTINGS_IDXS *altSetting, size_t)
                                                 {return m_Target.SetInterfaceAltSetting(altSetting->InterfaceIdx, altSetting->AltSettingIdx);});
-            m_IncomingDataQueue.Start();
+            ResumeData();
             return;
         }
         case IOCTL_USBDK_DEVICE_RESET_DEVICE:
         {
+            QuiesceData();
             CRedirectorRequest WdfRequest(Request);
             auto status = m_Target.ResetDevice(Request);
+            ResumeData();
             WdfRequest.SetStatus(status);
             return;
         }
@@ -450,6 +516,12 @@ void CUsbDkRedirectorStrategy::WritePipe(WDFREQUEST Request)
     }
 
     Context->Direction = UsbDkTransferDirection::Write;
+
+    if (m_Target.UsesRawConfiguration() && Context->TransferType != ControlTransferType)
+    {
+        RawTransfer(WdfRequest, false);
+        return;
+    }
 
     switch (Context->TransferType)
     {
@@ -545,6 +617,12 @@ void CUsbDkRedirectorStrategy::ReadPipe(WDFREQUEST Request)
 
     Context->Direction = UsbDkTransferDirection::Read;
 
+    if (m_Target.UsesRawConfiguration() && Context->TransferType != ControlTransferType)
+    {
+        RawTransfer(WdfRequest, true);
+        return;
+    }
+
     switch (Context->TransferType)
     {
     case ControlTransferType:
@@ -626,8 +704,86 @@ size_t CUsbDkRedirectorStrategy::GetRequestContextSize()
     return sizeof(USBDK_REDIRECTOR_REQUEST_CONTEXT);
 }
 
+void CUsbDkRedirectorStrategy::QuiesceData()
+{
+    // Stop new presentations before cancelling sent requests, including EP0.
+    // The old StopSync wrapper only initiates an asynchronous queue drain.
+    UsbDkQuiesceConfigurationData(m_IncomingDataQueue, m_Target);
+}
+
+void CUsbDkRedirectorStrategy::ResumeData()
+{
+    m_IncomingDataQueue.Start();
+}
+
+void CUsbDkRedirectorStrategy::RawTransfer(CRedirectorRequest &Request, bool Read)
+{
+    auto context = Request.Context();
+    CPreAllocatedWdfMemoryBufferT<ULONG64> packets(context->LockedIsochronousPacketsArray);
+    auto status = m_Target.FormatRawTransfer(Request, context->EndpointAddress, context->TransferType,
+                                             Read, context->LockedBuffer, packets.Ptr(), packets.ArraySize(), context->RawUrb);
+    if (NT_SUCCESS(status))
+    {
+        status = Request.SendWithCompletion(m_Target.RawIoTarget(), RawCompletion);
+    }
+    Request.SetStatus(status);
+}
+
+void CUsbDkRedirectorStrategy::RawCompletion(WDFREQUEST Request, WDFIOTARGET,
+                                             PWDF_REQUEST_COMPLETION_PARAMS Params, WDFCONTEXT)
+{
+    CRedirectorRequest request(Request);
+    auto context = request.Context();
+    auto urb = static_cast<PURB>(WdfMemoryGetBuffer(context->RawUrb, nullptr));
+    CPreAllocatedWdfMemoryBuffer buffer(context->LockedBuffer);
+    auto status = Params->IoStatus.Status;
+    auto usbdStatus = urb->UrbHeader.Status;
+    size_t transferred = 0;
+    if (context->TransferType == IsochronousTransferType)
+    {
+        CPreAllocatedWdfMemoryBufferT<USB_DK_ISO_TRANSFER_RESULT> results(context->LockedIsochronousResultsArray);
+        if (results.ArraySize() != urb->UrbIsochronousTransfer.NumberOfPackets)
+        {
+            status = STATUS_DEVICE_DATA_ERROR;
+            usbdStatus = USBD_STATUS_INTERNAL_HC_ERROR;
+        }
+        else
+        {
+            for (ULONG i = 0; i < urb->UrbIsochronousTransfer.NumberOfPackets; ++i)
+            {
+                auto &packet = urb->UrbIsochronousTransfer.IsoPacket[i];
+                if (packet.Offset > buffer.Size() || packet.Length > buffer.Size() - packet.Offset)
+                {
+                    status = STATUS_DEVICE_DATA_ERROR;
+                    usbdStatus = USBD_STATUS_INTERNAL_HC_ERROR;
+                    break;
+                }
+                size_t actual;
+                UsbDkActualTransferLength(NT_SUCCESS(status), USBD_SUCCESS(usbdStatus) && USBD_SUCCESS(packet.Status),
+                                          packet.Length, buffer.Size() - packet.Offset, actual);
+                results.Ptr()[i].ActualLength = actual;
+                results.Ptr()[i].TransferResult = packet.Status;
+                transferred += actual;
+            }
+        }
+    }
+    else
+    {
+        transferred = urb->UrbBulkOrInterruptTransfer.TransferBufferLength;
+    }
+    size_t actual;
+    if (!UsbDkActualTransferLength(NT_SUCCESS(status), USBD_SUCCESS(usbdStatus), transferred, buffer.Size(), actual))
+    {
+        status = STATUS_DEVICE_DATA_ERROR;
+        usbdStatus = USBD_STATUS_INTERNAL_HC_ERROR;
+    }
+    CompleteTransferRequest(request, status, usbdStatus, actual);
+}
+
 void CUsbDkRedirectorStrategy::OnClose()
 {
+    QuiesceData();
+    m_ConfigurationOwner = WDF_NO_HANDLE;
     USB_DK_DEVICE_ID ID;
     UsbDkFillIDStruct(&ID, *m_DeviceID->begin(), *m_InstanceID->begin());
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_REDIRECTOR, "%!FUNC!");
